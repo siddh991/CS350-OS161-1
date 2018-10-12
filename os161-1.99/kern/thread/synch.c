@@ -164,7 +164,26 @@ lock_create(const char *name)
         }
         
         // add stuff here as needed
+
+        // similar to semaphore, we're going to create our wake channel
+        lock->lk_wchan = wchan_create(lock->lk_name);
+
+        // honestly don't know why this part is needed but the semaphore did it:
+        if (lock->lk_wchan == NULL) {
+		kfree(lock->lk_name);
+		kfree(lock);
+		return NULL;
+	}
         
+        // now we have to initialize our spinlock 
+	spinlock_init(&lock->lk_lock);
+
+        // unlike semaphore, we don't count
+        // instead we use a thread itself
+
+        // this bad boy will indicate what thread holds a lock;
+        lock->lk_thread = NULL;
+
         return lock;
 }
 
@@ -173,8 +192,11 @@ lock_destroy(struct lock *lock)
 {
         KASSERT(lock != NULL);
 
-        // add stuff here as needed
-        
+        // delete the spinlock and the wchan
+        // do we need to clean the thread up?
+        spinlock_cleanup(&lock->lk_lock);
+        wchan_destroy(lock->lk_wchan);
+
         kfree(lock->lk_name);
         kfree(lock);
 }
@@ -182,15 +204,61 @@ lock_destroy(struct lock *lock)
 void
 lock_acquire(struct lock *lock)
 {
-        // Write this
 
-        (void)lock;  // suppress warning until code gets written
+        KASSERT(lock != NULL);
+        KASSERT(curthread->t_in_interrupt == false);
+        KASSERT(!lock_do_i_hold(lock));
+
+	// we have to acquire the lock with a spinlock
+        // this is to prevent multiple acquires
+        spinlock_acquire(&lock->lk_lock);
+
+        // copy paste of semaphore almost:
+
+        // while the lock holds something
+        while (lock->lk_thread != NULL) {
+                
+
+                // basically, we block this thread
+
+                // lock the wait channel (so nothing happens while 
+                // we're messing around)
+		wchan_lock(lock->lk_wchan);
+
+                // release the lock, so we can allow everything else to run
+		spinlock_release(&lock->lk_lock);
+
+                // block this thread on the wait channel
+                // cause a context switch
+                wchan_sleep(lock->lk_wchan);
+
+                // acquire the lock again to prevent meddling
+		spinlock_acquire(&lock->lk_lock);
+        }
+
+
+        // now, we can update the thread holding the lock
+        lock->lk_thread = curthread;
+
+        // we don't need the lock anymore so we're good
+        spinlock_release(&lock->lk_lock);
 }
 
 void
 lock_release(struct lock *lock)
 {
-        // Write this
+        KASSERT(lock->lk_thread == curthread);
+
+        // No meddling while we perform this next part
+        spinlock_acquire(&lock->lk_lock);
+
+        lock->lk_thread = NULL; // set our current thread to null
+
+        // we can now unblock a thread from the wait (is it wake?) channel
+        wchan_wakeone(lock->lk_wchan);
+
+        // all the important work is done so we good
+        spinlock_release(&lock->lk_lock);
 
         (void)lock;  // suppress warning until code gets written
 }
@@ -198,11 +266,9 @@ lock_release(struct lock *lock)
 bool
 lock_do_i_hold(struct lock *lock)
 {
-        // Write this
+        KASSERT(lock != NULL);
 
-        (void)lock;  // suppress warning until code gets written
-
-        return true; // dummy until code gets written
+        return lock->lk_thread == curthread; // dummy until code gets written
 }
 
 ////////////////////////////////////////////////////////////
@@ -226,8 +292,14 @@ cv_create(const char *name)
                 return NULL;
         }
         
-        // add stuff here as needed
-        
+        // we create our waitchannel
+        cv->cv_wchan = wchan_create(cv->cv_name);
+        // honestly don't know why this part is needed but the semaphore did it:
+        if (cv->cv_wchan == NULL) {
+		kfree(cv->cv_name);
+		kfree(cv);
+		return NULL;
+	}
         return cv;
 }
 
@@ -237,6 +309,9 @@ cv_destroy(struct cv *cv)
         KASSERT(cv != NULL);
 
         // add stuff here as needed
+        // we clean up our wait channel
+
+        wchan_destroy(cv->cv_wchan);
         
         kfree(cv->cv_name);
         kfree(cv);
@@ -246,14 +321,35 @@ void
 cv_wait(struct cv *cv, struct lock *lock)
 {
         // Write this
-        (void)cv;    // suppress warning until code gets written
-        (void)lock;  // suppress warning until code gets written
+        KASSERT(cv != NULL);
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(lock));
+
+        // so we lock our wait channel to avoid meddling
+        wchan_lock(cv->cv_wchan);
+
+        // we release the lock (for now) so other stuff can continue
+        lock_release(lock);
+
+        // we put the channel to sleep 
+        // this triggers context switch
+        wchan_sleep(cv->cv_wchan);
+
+        // we reacquire the lock when it's our turn
+        lock_acquire(lock);
+
 }
 
 void
 cv_signal(struct cv *cv, struct lock *lock)
 {
-        // Write this
+        KASSERT(cv != NULL);
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(lock));
+        // we just wake a thread in our wait channel
+        wchan_wakeone(cv->cv_wchan);
+
+
 	(void)cv;    // suppress warning until code gets written
 	(void)lock;  // suppress warning until code gets written
 }
@@ -261,7 +357,10 @@ cv_signal(struct cv *cv, struct lock *lock)
 void
 cv_broadcast(struct cv *cv, struct lock *lock)
 {
-	// Write this
-	(void)cv;    // suppress warning until code gets written
-	(void)lock;  // suppress warning until code gets written
+	KASSERT(cv != NULL);
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(lock));
+
+        // we wake up all the threads in the wait channel
+        wchan_wakeall(cv->cv_wchan);
 }

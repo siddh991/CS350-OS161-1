@@ -36,6 +36,7 @@
 
 
 #include <spinlock.h>
+#include "queue.h"
 
 /*
  * Dijkstra-style semaphore.
@@ -76,6 +77,16 @@ struct lock {
         char *lk_name;
         // add what you need here
         // (don't forget to mark things volatile as needed)
+
+
+        // this is the wake channel for the lock
+        struct wchan *lk_wchan;
+
+        // this is the spinlock we'll be using to try to acquire
+        struct spinlock lk_lock;
+
+        // this is the volatile "data" that indicates which thread holds the lock
+        volatile struct thread *lk_thread;
 };
 
 struct lock *lock_create(const char *name);
@@ -115,6 +126,7 @@ struct cv {
         char *cv_name;
         // add what you need here
         // (don't forget to mark things volatile as needed)
+        struct wchan *cv_wchan;
 };
 
 struct cv *cv_create(const char *name);
