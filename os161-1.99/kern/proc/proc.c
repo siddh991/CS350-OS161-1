@@ -50,6 +50,7 @@
 #include <vfs.h>
 #include <synch.h>
 #include <kern/fcntl.h>  
+#include "opt-A2.h"
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -102,6 +103,17 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
+
+
+#if OPT_A2
+	proc->parent = NULL;
+	proc->children = array_create();
+
+	
+
+#endif
+
+
 
 	return proc;
 }

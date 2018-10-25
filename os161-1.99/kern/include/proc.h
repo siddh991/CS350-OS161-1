@@ -49,6 +49,15 @@ struct semaphore;
  * Process structure.
  */
 struct proc {
+
+	#if OPT_A2
+	pid_t pid;
+	struct proc *parent;
+	struct array *children;
+
+	// do we need another lock?
+	#endif	
+
 	char *p_name;			/* Name of this process */
 	struct spinlock p_lock;		/* Lock for this structure */
 	struct threadarray p_threads;	/* Threads in this process */
@@ -99,6 +108,5 @@ struct addrspace *curproc_getas(void);
 
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *curproc_setas(struct addrspace *);
-
 
 #endif /* _PROC_H_ */

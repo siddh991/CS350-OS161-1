@@ -9,6 +9,7 @@
 #include <thread.h>
 #include <addrspace.h>
 #include <copyinout.h>
+#include "opt-A2.h"
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -55,6 +56,8 @@ sys_getpid(pid_t *retval)
 {
   /* for now, this is just a stub that always returns a PID of 1 */
   /* you need to fix this to make it work properly */
+
+  curproc
   *retval = 1;
   return(0);
 }
@@ -92,3 +95,69 @@ sys_waitpid(pid_t pid,
   return(0);
 }
 
+
+
+
+#if OPT_A2
+// we will return the child process' PID
+  // what we need to do:
+  // we need to create address space for the child (with as_copy())
+  // we will use curproc_set() to assign the address space to the child
+  // we need to assign the child a PID (lord knows how)
+  // we have to create a thread for the child (use thread_fork())
+  // we need to pass the trapframe to the child (apparently not using a pointer to it)
+int sys_fork(struct trapframe *tf, pid_t *retval) {
+
+  // create new child process
+  struct proc *child proc_create_runprogram(curproc->name);
+  struct proc *parent = curproc;
+
+  if (child == NULL) {
+    return ENPROC;
+  }
+
+  /* create address space for the child */
+
+  // copy from parent
+  struct addrspace *child_addrspace = kmalloc(sizeof(struct addrspace)); 
+  as_copy(curproc_getas(), &child_addrspace);
+
+  // make sure it copied properly
+  if (child_addrspace == NULL) {
+    return ENOMEM;
+  }
+
+  /* assign the address space to the child (copy paste from curproc_setas()) */
+
+	spinlock_acquire(&child->p_lock);
+	child->p_addrspace = child_addrspace;
+	spinlock_release(&child->p_lock);
+
+  /* give the child a PID */
+
+  // the plan:
+  //  we're going to give each process a pointer to its parent
+  //  the parent will have a list of its children
+
+  child->parent = curproc; // makes logical sense: I am the parent of my child
+
+  array_init(child->children); // making sure my child is capable of children
+
+  spinlock_acquire(&(curproc->p_lock));
+  array_add(curproc->children, child, NULL); // add this child to my list of children
+  spinlock_release(&(curproc->p_lock));
+
+  /* create a thread for the child */
+
+  /* change of plans, we're doing the trapframe first */
+  struct trapframe *tf_child = kmalloc(sizeof(struct trapframe));
+
+  *tf_child = *tf;
+
+  // fork with name childproc, given the child process, and the entrypoint for forked processes
+  thread_fork("childproc", child, &enter_forked_process, tf_child, 0);
+
+  *retval = child->pid;
+  return 0;
+}
+#endif
