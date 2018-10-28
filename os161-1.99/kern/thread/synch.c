@@ -241,12 +241,14 @@ lock_acquire(struct lock *lock)
         lock->lk_thread = curthread;
 
         // we don't need the lock anymore so we're good
-        spinlock_release(&lock->lk_lock);
+        spinlock_release(&(lock->lk_lock));
 }
 
 void
 lock_release(struct lock *lock)
 {
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(lock));
         KASSERT(lock->lk_thread == curthread);
 
         // No meddling while we perform this next part

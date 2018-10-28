@@ -70,7 +70,10 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
-
+#if OPT_A2
+int count; // should probbaly use a better way to keep track of processes 
+struct spinlock lock_count;
+#endif
 
 /*
  * Create a proc structure.
@@ -108,7 +111,21 @@ proc_create(const char *name)
 #if OPT_A2
 	proc->parent = NULL;
 	proc->children = array_create();
-
+	proc->exited = false;
+	proc->exitcode = 0;
+	proc->cv = cv_create("cv");
+	proc->cv_lock = lock_create("cv_lock");
+	proc->pid_lock = lock_create("pid_lock");
+	
+	//spinlock_init(&(proc->cv_lock));
+	if (count != 1) {
+		spinlock_acquire(&lock_count);
+	}
+	proc->pid = count;
+	count++;
+	if (count != 2) {
+		spinlock_release(&lock_count);
+	}
 	
 
 #endif
@@ -175,11 +192,45 @@ proc_destroy(struct proc *proc)
 	}
 #endif // UW
 
+#if OPT_A2
+
+	if (array_num(proc->children) != 0) {
+		// we're not DELETING the children
+		//   we're just emptying the array UNLESS we have zombies
+		//   zombies are exited but not destroyed
+
+		for (int i = array_num(proc->children); i > 0; i--) {
+			struct proc* child = array_get(proc->children, i-1);
+
+			// it's a zombie
+			if (child->exited) {
+				child->parent = NULL;
+				proc_destroy(child);
+				array_remove(proc->children, i-1);
+			} 
+			// it's not a zombie, so just remove it from the array (avoid memory leaks)
+			else {
+				spinlock_acquire(&(child->p_lock));
+				child->parent = NULL;
+				spinlock_release(&(child->p_lock));
+				array_remove(proc->children, i-1);
+			}
+		}
+
+	}
+	array_destroy(proc->children);
+	cv_destroy(proc->cv);
+	lock_destroy(proc->cv_lock);
+
+#endif
+
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
 
 	kfree(proc->p_name);
 	kfree(proc);
+
+
 
 #ifdef UW
 	/* decrement the process count */
@@ -209,6 +260,12 @@ proc_bootstrap(void)
   if (kproc == NULL) {
     panic("proc_create for kproc failed\n");
   }
+
+#if OPT_A2
+	count = 1;
+	spinlock_init(&lock_count);
+#endif
+
 #ifdef UW
   proc_count = 0;
   proc_count_mutex = sem_create("proc_count_mutex",1);

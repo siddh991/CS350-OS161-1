@@ -36,6 +36,9 @@
 #include <current.h>
 #include <syscall.h>
 #include "opt-A2.h"
+#if OPT_A2
+#include <proc.h>
+#endif
 
 
 /*
@@ -110,13 +113,15 @@ syscall(struct trapframe *tf)
 				 (userptr_t)tf->tf_a1);
 		break;
 
-#if OPT_A2 
-			case SYS_fork:
+
+	#if OPT_A2
+	case SYS_fork:
 		err = sys_fork(tf, (pid_t *)&retval);
 		break;
-#endif // OPT_A2
+	#endif
 
 #ifdef UW
+
 	case SYS_write:
 	  err = sys_write((int)tf->tf_a0,
 			  (userptr_t)tf->tf_a1,
@@ -176,7 +181,6 @@ syscall(struct trapframe *tf)
 	KASSERT(curthread->t_iplhigh_count == 0);
 }
 
-#if OPT_A2
 /*
  * Enter user mode for a newly forked process.
  *
@@ -202,7 +206,7 @@ enter_forked_process(void *data1, unsigned long data2)
 	tf.tf_v0 = 0; // this is the return value
 	tf.tf_a3 = 0; // this is the error code
 
-	kfree(old); // delete the old trapframe
+	//kfree(temp); // delete the old trapframe
 
 	mips_usermode(&tf); // set it to user-mode !!
 	#else

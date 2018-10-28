@@ -38,6 +38,7 @@
 
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
+#include "opt-A2.h"
 
 struct addrspace;
 struct vnode;
@@ -54,7 +55,13 @@ struct proc {
 	pid_t pid;
 	struct proc *parent;
 	struct array *children;
+	struct lock *cv_lock;
+	struct lock *pid_lock;
+	struct cv *cv;
 
+	bool exited;
+
+	int exitcode;
 	// do we need another lock?
 	#endif	
 
@@ -88,6 +95,10 @@ extern struct proc *kproc;
 extern struct semaphore *no_proc_sem;
 #endif // UW
 
+#if OPT_A2
+	extern int count; // count the number of processes
+	extern struct spinlock lock_count;
+#endif
 /* Call once during system startup to allocate data structures. */
 void proc_bootstrap(void);
 

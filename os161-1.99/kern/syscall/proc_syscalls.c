@@ -9,7 +9,9 @@
 #include <thread.h>
 #include <addrspace.h>
 #include <copyinout.h>
+#include <mips/trapframe.h> 
 #include "opt-A2.h"
+#include <synch.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -40,10 +42,28 @@ void sys__exit(int exitcode) {
   /* note: curproc cannot be used after this call */
   proc_remthread(curthread);
 
+  #if OPT_A2
+
+    // the plan: not much to do just set the exit code
+    if (p->parent == NULL) {
+        p->exited = true;
+        proc_destroy(p); // just destroy it, it has no parent to worry about
+    } else {
+      // we making ourselves a zombie boys
+      p->exitcode = _MKWAIT_EXIT(exitcode); 
+      p->exited = true; // the parent will check for this when it destroys
+
+      // we need to let our parent know that we're actually dead
+      lock_acquire(p->cv_lock);
+      cv_broadcast(p->cv, p->cv_lock);
+      lock_release(p->cv_lock);
+    }
+  #endif
+
   /* if this is the last user process in the system, proc_destroy()
      will wake up the kernel menu thread */
-  proc_destroy(p);
   
+    //.~proc_destroy(p);
   thread_exit();
   /* thread_exit() does not return, so we should never get here */
   panic("return from thread_exit in sys_exit\n");
@@ -56,9 +76,11 @@ sys_getpid(pid_t *retval)
 {
   /* for now, this is just a stub that always returns a PID of 1 */
   /* you need to fix this to make it work properly */
-
-  curproc
+  #if OPT_A2
+  *retval = curproc->pid;
+  #else 
   *retval = 1;
+  #endif
   return(0);
 }
 
@@ -81,10 +103,50 @@ sys_waitpid(pid_t pid,
 
      Fix this!
   */
-
   if (options != 0) {
     return(EINVAL);
   }
+
+ #if OPT_A2
+  KASSERT(curproc != NULL);
+
+  // only the parent can call on its children
+
+  struct proc *child;
+
+  // look for the matching child 
+  for (unsigned i = 0; i < array_num(curproc->children); i++) {
+    pid_t child_pid = ((struct proc*)array_get(curproc->children, i))->pid;
+    if (child_pid == pid) {
+      child = array_get(curproc->children, i); // we found it
+      break;
+    }
+  }
+
+  if (child == NULL) {
+    panic ("PID not found");
+    return ECHILD;
+  }
+
+  // if the child process hasn't exited, we have to block (how do we block?)
+  lock_acquire(child->cv_lock);
+  while (child->exited == false) {
+    cv_wait(child->cv, child->cv_lock);
+  }
+  lock_release(child->cv_lock);
+  exitstatus = child->exitcode;
+
+  // if child process is exited, I need to get exit status and exit code
+  result = copyout((void *)&exitstatus, status, sizeof(int));
+  if (result) {
+    return result;
+  }
+  *retval = pid;
+  // can't rely on this to do PID cleanup
+
+  // what if parent exits before children
+
+#else
   /* for now, just pretend the exitstatus is 0 */
   exitstatus = 0;
   result = copyout((void *)&exitstatus,status,sizeof(int));
@@ -92,6 +154,7 @@ sys_waitpid(pid_t pid,
     return(result);
   }
   *retval = pid;
+ #endif
   return(0);
 }
 
@@ -107,10 +170,10 @@ sys_waitpid(pid_t pid,
   // we have to create a thread for the child (use thread_fork())
   // we need to pass the trapframe to the child (apparently not using a pointer to it)
 int sys_fork(struct trapframe *tf, pid_t *retval) {
-
-  // create new child process
-  struct proc *child proc_create_runprogram(curproc->name);
-  struct proc *parent = curproc;
+  KASSERT(curproc != NULL);
+  
+    // create new child process
+  struct proc *child = proc_create_runprogram(curproc->p_name);
 
   if (child == NULL) {
     return ENPROC;
@@ -120,7 +183,11 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 
   // copy from parent
   struct addrspace *child_addrspace = kmalloc(sizeof(struct addrspace)); 
-  as_copy(curproc_getas(), &child_addrspace);
+  int copyret = as_copy(curproc_getas(), &child_addrspace);
+  if (copyret != 0) {
+    proc_destroy(child);
+    return ENOMEM;
+  }
 
   // make sure it copied properly
   if (child_addrspace == NULL) {
@@ -150,13 +217,21 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
   /* create a thread for the child */
 
   /* change of plans, we're doing the trapframe first */
-  struct trapframe *tf_child = kmalloc(sizeof(struct trapframe));
+  struct trapframe *tf_child = kmalloc(sizeof(struct trapframe));;
 
   *tf_child = *tf;
 
+  if (tf_child == NULL) {
+    return ENOMEM;
+  }
   // fork with name childproc, given the child process, and the entrypoint for forked processes
-  thread_fork("childproc", child, &enter_forked_process, tf_child, 0);
+  int ret = thread_fork("childproc", child, ((void *)&enter_forked_process), tf_child, 0);
 
+  if (ret) {
+    kfree(tf_child);
+    proc_destroy(child);
+    return ret;
+  }
   *retval = child->pid;
   return 0;
 }
